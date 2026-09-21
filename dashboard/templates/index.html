@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Network Security Scanner</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <!-- Vis-Network Graphing Library (2D) -->
+    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    
+    <style>
+        body {
+            background: linear-gradient(-45deg, #020617, #082f49, #000000, #0f172a);
+            background-size: 400% 400%;
+            animation: gradientBG 15s ease infinite;
+            color: white;
+        }
+        @keyframes gradientBG {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+
+        .glass-panel {
+            background: rgba(15, 23, 42, 0.4);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(34, 211, 238, 0.25);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.6);
+        }
+        
+        .glass-inner {
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .glow-cyan { text-shadow: 0 0 10px rgba(34, 211, 238, 0.8), 0 0 20px rgba(34, 211, 238, 0.4); }
+        .glow-green { text-shadow: 0 0 10px rgba(74, 222, 128, 0.8), 0 0 20px rgba(74, 222, 128, 0.4); }
+        .glow-yellow { text-shadow: 0 0 10px rgba(253, 224, 71, 0.8), 0 0 20px rgba(253, 224, 71, 0.4); }
+        .glow-red { text-shadow: 0 0 10px rgba(239, 68, 68, 0.8), 0 0 20px rgba(239, 68, 68, 0.4); }
+        .glow-white { text-shadow: 0 0 8px rgba(255, 255, 255, 0.8); }
+        
+        .btn-glow:hover {
+            box-shadow: 0 0 20px rgba(34, 211, 238, 0.6);
+            background: rgba(34, 211, 238, 0.2);
+        }
+
+        /* Sentinel Switch Animations */
+        .sentinel-checkbox:checked + .sentinel-bg {
+            background-color: rgba(74, 222, 128, 0.2);
+            border-color: #4ade80;
+        }
+        .sentinel-checkbox:checked + .sentinel-bg .sentinel-dot {
+            transform: translateX(100%);
+            background-color: #4ade80;
+            box-shadow: 0 0 15px #4ade80;
+        }
+        
+        /* Remove default blue outline on vis-network canvas */
+        .vis-network { outline: none; }
+    </style>
+</head>
+<body class="min-h-screen p-8 font-sans">
+    <div class="max-w-7xl mx-auto relative z-10">
+        <!-- Header -->
+        <header class="flex justify-between items-center mb-8 pb-4 border-b border-cyan-500/30">
+            <h1 class="text-4xl font-bold text-cyan-400 glow-cyan tracking-wider">
+                <i class="fas fa-network-wired mr-3"></i>Recon Dashboard
+            </h1>
+            <div class="flex items-center space-x-6">
+                
+                <!-- Sentinel Toggle -->
+                <label class="flex items-center cursor-pointer group" title="Auto-scan every 60s and trigger Windows Alerts on rogue devices">
+                    <div class="relative">
+                        <input type="checkbox" id="sentinelToggle" class="sr-only sentinel-checkbox">
+                        <div class="sentinel-bg block bg-gray-800 w-14 h-8 rounded-full border border-cyan-500/30 transition-colors duration-300"></div>
+                        <div class="sentinel-dot absolute left-1 top-1 bg-cyan-500 w-6 h-6 rounded-full transition-transform duration-300 shadow-[0_0_10px_#22d3ee]"></div>
+                    </div>
+                    <div class="ml-3 text-cyan-400 font-bold tracking-widest glow-cyan flex items-center">
+                        <i class="fas fa-shield-alt mr-2"></i> SENTINEL
+                    </div>
+                </label>
+
+                <!-- Map View Toggle Button -->
+                <button id="viewToggleBtn" class="glass-panel btn-glow hover:bg-cyan-900/40 text-cyan-300 px-6 py-3 rounded-lg font-bold transition-all duration-300 flex items-center tracking-widest glow-cyan border border-cyan-400/50">
+                    <i class="fas fa-project-diagram mr-2"></i> MAP VIEW
+                </button>
+
+                <button id="scanBtn" class="glass-panel btn-glow text-cyan-300 px-8 py-3 rounded-lg font-bold transition-all duration-300 flex items-center tracking-widest glow-cyan border border-cyan-400/50">
+                    <i class="fas fa-radar mr-2"></i> START SCAN
+                </button>
+            </div>
+        </header>
+
+        <!-- Error/Alert Box -->
+        <div id="statusAlert" class="hidden mb-6 p-4 rounded-lg glass-panel shadow-lg font-bold tracking-wider transition-all duration-300">
+        </div>
+
+        <!-- Loading Animation -->
+        <div id="loadingState" class="hidden flex-col items-center justify-center py-20">
+            <div class="relative w-32 h-32 mb-8">
+                <div class="absolute inset-0 rounded-full border-4 border-cyan-500/10"></div>
+                <div class="absolute inset-0 rounded-full border-t-4 border-cyan-400 animate-spin shadow-[0_0_15px_#22d3ee]"></div>
+                <i class="fas fa-satellite-dish absolute inset-0 flex items-center justify-center text-4xl text-cyan-400 glow-cyan"></i>
+            </div>
+            <h2 class="text-2xl text-cyan-400 animate-pulse font-bold glow-cyan tracking-widest">SCANNING SUBNET...</h2>
+            <p class="text-cyan-200/70 mt-3 font-mono tracking-wide">Resolving MAC vendors & scanning open ports.</p>
+        </div>
+        
+        <!-- Results Container Wrapper -->
+        <div id="uiContainer" class="hidden opacity-0 transition-opacity duration-700">
+            
+            <!-- TABLE VIEW -->
+            <div id="resultsContainer" class="glass-panel rounded-xl overflow-hidden">
+                <div class="p-5 glass-inner border-b border-cyan-500/20 flex justify-between items-center">
+                    <h2 class="text-2xl font-bold text-green-400 glow-green"><i class="fas fa-server mr-3"></i>Active Targets</h2>
+                    <span id="deviceCount" class="glass-panel border-cyan-400/50 text-cyan-300 py-1.5 px-5 rounded-full text-sm font-bold tracking-widest glow-cyan shadow-[0_0_10px_rgba(34,211,238,0.3)]">
+                        0 FOUND
+                    </span>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left border-collapse font-mono">
+                        <thead class="glass-inner text-cyan-100 glow-white text-lg">
+                            <tr>
+                                <th class="p-5 font-semibold tracking-wider">IP ADDRESS</th>
+                                <th class="p-5 font-semibold tracking-wider">MAC ADDRESS</th>
+                                <th class="p-5 font-semibold tracking-wider">VENDOR / TYPE</th>
+                                <th class="p-5 font-semibold tracking-wider text-center">ACCESS CONTROL</th>
+                            </tr>
+                        </thead>
+                        <tbody id="deviceList" class="divide-y divide-cyan-500/10">
+                            <!-- Rows injected dynamically via JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- MAP VIEW -->
+            <div id="mapContainer" class="hidden glass-panel rounded-xl overflow-hidden h-[650px] w-full relative">
+                <!-- Map Legend -->
+                <div class="absolute top-5 left-5 z-20 glass-inner p-4 rounded-lg border border-cyan-500/30 text-cyan-200 text-xs font-mono tracking-widest pointer-events-none shadow-[0_0_20px_rgba(34,211,238,0.15)] bg-gray-900/80 backdrop-blur-md">
+                    <div class="mb-3 font-bold text-cyan-400 glow-cyan border-b border-cyan-500/30 pb-2"><i class="fas fa-sitemap mr-2"></i>TOPOLOGY LEGEND</div>
+                    <div class="mb-2 flex items-center"><span class="w-3 h-3 rounded-full bg-green-400 shadow-[0_0_10px_#4ade80] mr-3"></span> TRUSTED NODE</div>
+                    <div class="mb-2 flex items-center"><span class="w-3 h-3 rounded-full bg-red-400 shadow-[0_0_10px_#ef4444] mr-3"></span> ROGUE NODE</div>
+                    <div class="mb-4 flex items-center"><span class="w-3 h-3 rounded-full bg-yellow-400 shadow-[0_0_10px_#fde047] mr-3"></span> UNKNOWN NODE</div>
+                </div>
+                <!-- Interactive Canvas -->
+                <div id="networkMap" class="w-full h-full bg-black/40"></div>
+            </div>
+            
+        </div>
+    </div>
+
+    <!-- Frontend Logic -->
+    <script>
+        let currentDevices = [];
+        let currentSubnet = "";
+        
+        let isMapView = false;
+        let networkGraph = null;
+
+        // --- View Toggle Logic ---
+        document.getElementById('viewToggleBtn').addEventListener('click', () => {
+            isMapView = !isMapView;
+            const btn = document.getElementById('viewToggleBtn');
+            const tableCont = document.getElementById('resultsContainer');
+            const mapCont = document.getElementById('mapContainer');
+
+            if (isMapView) {
+                btn.innerHTML = '<i class="fas fa-table mr-2"></i> TABLE VIEW';
+                tableCont.classList.add('hidden');
+                mapCont.classList.remove('hidden');
+                setTimeout(() => drawMap(), 100); // 100ms guarantees DOM paint completion
+            } else {
+                btn.innerHTML = '<i class="fas fa-project-diagram mr-2"></i> MAP VIEW';
+                mapCont.classList.add('hidden');
+                tableCont.classList.remove('hidden');
+            }
+        });
+
+        // --- Sentinel System Logic ---
+        let sentinelTimer = null;
+        let alertedMacs = new Set(); // Prevent duplicate alerts
+
+        document.getElementById('sentinelToggle').addEventListener('change', async (e) => {
+            const isEnabled = e.target.checked;
+            const alertBox = document.getElementById('statusAlert');
+            
+            if (isEnabled) {
+                if (Notification.permission !== "granted") {
+                    const perm = await Notification.requestPermission();
+                    if (perm !== "granted") {
+                        alertBox.innerHTML = `<i class="fas fa-exclamation-circle mr-2"></i> Sentinel requires Windows Notification permissions!`;
+                        alertBox.className = "mb-6 p-4 rounded-lg glass-panel border border-red-500/50 text-red-300 shadow-lg glow-red font-bold tracking-wider";
+                        alertBox.classList.remove('hidden');
+                        e.target.checked = false;
+                        return;
+                    }
+                }
+                
+                alertBox.innerHTML = `<i class="fas fa-shield-alt mr-2"></i> SENTINEL ACTIVE. Monitoring network in the background...`;
+                alertBox.className = "mb-6 p-4 rounded-lg glass-panel border border-green-500/50 text-green-300 shadow-lg glow-green font-bold tracking-wider";
+                alertBox.classList.remove('hidden');
+                
+                sentinelTimer = setInterval(runSentinelScan, 60000);
+                runSentinelScan(); 
+                
+            } else {
+                clearInterval(sentinelTimer);
+                alertBox.innerHTML = `<i class="fas fa-shield-alt mr-2"></i> SENTINEL DEACTIVATED.`;
+                alertBox.className = "mb-6 p-4 rounded-lg glass-panel border border-gray-500/50 text-gray-300 shadow-lg glow-white font-bold tracking-wider";
+                setTimeout(() => alertBox.classList.add('hidden'), 3000);
+            }
+        });
+
+        async function runSentinelScan() {
+            try {
+                const response = await fetch('/api/scan');
+                const data = await response.json();
+                if (data.status === 'success') {
+                    let intrusionDetected = false;
+                    let intrusionMsgs = [];
+                    
+                    data.devices.forEach(dev => {
+                        if (dev.status === 'rogue' || dev.status === 'unknown') {
+                            if (!alertedMacs.has(dev.mac)) {
+                                intrusionDetected = true;
+                                intrusionMsgs.push(`${dev.ip} - ${dev.vendor}`);
+                                alertedMacs.add(dev.mac);
+                            }
+                        }
+                    });
+                    
+                    if (intrusionDetected) {
+                        new Notification("🚨 NETWORK INTRUSION ALARM", {
+                            body: `Unauthorized device(s) joined your network:\n${intrusionMsgs.join('\n')}`,
+                            requireInteraction: true
+                        });
+                    }
+                    
+                    currentDevices = data.devices;
+                    currentSubnet = data.subnet;
+                    renderTable();
+                    
+                    const container = document.getElementById('uiContainer');
+                    if (container.classList.contains('hidden')) {
+                        container.classList.remove('hidden');
+                        setTimeout(() => container.classList.add('opacity-100'), 50);
+                    }
+                }
+            } catch (err) {
+                console.error("Sentinel Scan Error:", err);
+            }
+        }
+
+
+        // --- Render UI Table ---
+        function renderTable() {
+            const tbody = document.getElementById('deviceList');
+            const countBadge = document.getElementById('deviceCount');
+            tbody.innerHTML = '';
+
+            if (currentDevices.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="4" class="p-8 text-center text-yellow-400 glow-yellow text-lg font-bold"><i class="fas fa-exclamation-triangle mr-3"></i> NO DEVICES FOUND ON SUBNET ${currentSubnet}.</td></tr>`;
+                countBadge.textContent = '0 FOUND';
+            } else {
+                countBadge.textContent = `${currentDevices.length} FOUND`;
+                
+                currentDevices.forEach(device => {
+                    const tr = document.createElement('tr');
+                    tr.className = 'hover:bg-cyan-900/20 transition-colors duration-300';
+                    
+                    let statusBadge = '';
+                    let actionButtons = '';
+                    
+                    if (device.status === 'trusted') {
+                        statusBadge = `<span class="px-3 py-1 bg-green-900/50 text-green-400 border border-green-500/50 rounded glow-green text-xs font-bold uppercase tracking-widest"><i class="fas fa-check-circle mr-1"></i> TRUSTED</span>`;
+                        actionButtons = `<button onclick="updateStatus('${device.mac}', 'rogue')" class="ml-4 px-3 py-1 glass-panel text-red-400 hover:bg-red-900/40 border border-red-500/30 rounded transition-all text-xs font-bold glow-red hover:shadow-[0_0_15px_rgba(239,68,68,0.5)]">MARK ROGUE</button>`;
+                    } else if (device.status === 'rogue') {
+                        statusBadge = `<span class="px-3 py-1 bg-red-900/80 text-red-400 border border-red-500 rounded glow-red text-xs font-bold uppercase tracking-widest animate-pulse"><i class="fas fa-radiation mr-1"></i> ROGUE</span>`;
+                        actionButtons = `<button onclick="updateStatus('${device.mac}', 'trusted')" class="ml-4 px-3 py-1 glass-panel text-green-400 hover:bg-green-900/40 border border-green-500/30 rounded transition-all text-xs font-bold glow-green hover:shadow-[0_0_15px_rgba(74,222,128,0.5)]">TRUST DEVICE</button>`;
+                    } else {
+                        statusBadge = `<span class="px-3 py-1 bg-yellow-900/50 text-yellow-300 border border-yellow-500/50 rounded glow-yellow text-xs font-bold uppercase tracking-widest"><i class="fas fa-question-circle mr-1"></i> UNKNOWN</span>`;
+                        actionButtons = `
+                            <button onclick="updateStatus('${device.mac}', 'trusted')" class="ml-4 px-3 py-1 glass-panel text-green-400 hover:bg-green-900/40 border border-green-500/30 rounded transition-all text-xs font-bold glow-green hover:shadow-[0_0_15px_rgba(74,222,128,0.5)]">TRUST</button>
+                            <button onclick="updateStatus('${device.mac}', 'rogue')" class="ml-2 px-3 py-1 glass-panel text-red-400 hover:bg-red-900/40 border border-red-500/30 rounded transition-all text-xs font-bold glow-red hover:shadow-[0_0_15px_rgba(239,68,68,0.5)]">ROGUE</button>
+                        `;
+                    }
+
+                    const dType = device.device_type || {icon: "fas fa-microchip", label: "NETWORK DEVICE"};
+
+                    let servicesHTML = '';
+                    if (device.open_services && device.open_services.length > 0) {
+                        servicesHTML = '<div class="mt-2 flex flex-wrap gap-1">';
+                        device.open_services.forEach(srv => {
+                            servicesHTML += `<span class="px-2 py-0.5 bg-purple-900/40 text-purple-300 border border-purple-500/40 rounded text-[9px] font-bold tracking-widest shadow-[0_0_8px_rgba(168,85,247,0.3)]"><i class="${srv.icon} mr-1"></i>${srv.name}</span>`;
+                        });
+                        servicesHTML += '</div>';
+                    }
+
+                    let latencyBadge = '';
+                    if (device.latency !== undefined) {
+                        if (device.latency === -1) {
+                            latencyBadge = `<span class="text-[10px] text-red-500 font-bold ml-3"><i class="fas fa-signal-slash mr-1"></i>Timeout</span>`;
+                        } else if (device.latency < 10) {
+                            latencyBadge = `<span class="text-[10px] text-green-400 font-bold ml-3 glow-green"><i class="fas fa-wifi mr-1"></i>${device.latency}ms</span>`;
+                        } else if (device.latency < 100) {
+                            latencyBadge = `<span class="text-[10px] text-yellow-400 font-bold ml-3 glow-yellow"><i class="fas fa-wifi mr-1"></i>${device.latency}ms</span>`;
+                        } else {
+                            latencyBadge = `<span class="text-[10px] text-red-400 font-bold ml-3 glow-red animate-pulse"><i class="fas fa-wifi mr-1"></i>${device.latency}ms</span>`;
+                        }
+                    }
+
+                    tr.innerHTML = `
+                        <td class="p-5 text-cyan-400 glow-cyan">
+                            <div class="font-bold text-lg flex items-center"><i class="fas fa-laptop-network mr-3 opacity-70"></i>${device.ip} ${latencyBadge}</div>
+                            <div class="text-xs text-cyan-100/60 mt-1 uppercase tracking-widest"><i class="fas fa-desktop mr-2"></i>${device.hostname}</div>
+                            ${servicesHTML}
+                        </td>
+                        <td class="p-5 text-green-400 glow-green font-bold tracking-widest">${device.mac}</td>
+                        <td class="p-5 text-yellow-300 font-bold uppercase">
+                            <div class="glow-yellow">${device.vendor}</div>
+                            <div class="mt-2 inline-block px-3 py-1 bg-cyan-900/30 text-cyan-200 border border-cyan-500/40 rounded shadow-[0_0_10px_rgba(34,211,238,0.2)] text-[10px] tracking-widest">
+                                <i class="${dType.icon} mr-1"></i> ${dType.label}
+                            </div>
+                        </td>
+                        <td class="p-5 text-center whitespace-nowrap">${statusBadge}${actionButtons}</td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            }
+
+            // Sync map if visible
+            if (isMapView) {
+                drawMap();
+            }
+        }
+
+        // --- Render Visual Topology Map (2D) ---
+        function drawMap() {
+            if (currentDevices.length === 0) return;
+            const container = document.getElementById('networkMap');
+            
+            try {
+                let nodes = [];
+                let edges = [];
+
+                // The Core Router Node
+                nodes.push({
+                    id: 0,
+                    label: 'GATEWAY\n' + currentSubnet,
+                    font: { color: '#22d3ee', face: 'monospace', size: 16, strokeWidth: 0, multi: true },
+                    shape: 'dot',
+                    size: 25,
+                    color: { background: '#082f49', border: '#22d3ee' },
+                    borderWidth: 4,
+                    shadow: { enabled: true, color: '#22d3ee', size: 30, x: 0, y: 0 }
+                });
+
+                // Device Nodes
+                currentDevices.forEach((dev, index) => {
+                    const nodeId = index + 1;
+                    let nodeColor = '#fde047'; // yellow
+                    let shadowColor = 'rgba(253, 224, 71, 0.8)';
+                    
+                    if (dev.status === 'trusted') {
+                        nodeColor = '#4ade80'; // green
+                        shadowColor = 'rgba(74, 222, 128, 0.8)';
+                    } else if (dev.status === 'rogue') {
+                        nodeColor = '#ef4444'; // red
+                        shadowColor = 'rgba(239, 68, 68, 0.9)';
+                    }
+
+                    let cleanName = dev.hostname !== 'Unknown Device' ? dev.hostname : dev.vendor;
+                    if (cleanName && cleanName.length > 20) {
+                        cleanName = cleanName.substring(0, 17) + '...';
+                    }
+                    
+                    let mapLabel = dev.ip + '\n' + cleanName;
+                    if (dev.open_services && dev.open_services.length > 0) {
+                        const srvNames = dev.open_services.map(s => s.name).join(',');
+                        mapLabel += '\n[' + srvNames + ']';
+                    }
+                    
+                    // Add latency to label and adjust node border color (Heatmap effect)
+                    let borderHeatColor = nodeColor;
+                    if (dev.latency !== undefined) {
+                        if (dev.latency === -1) {
+                            mapLabel += '\n❌ Timeout';
+                            borderHeatColor = '#ef4444'; // Red border for dead nodes
+                        } else {
+                            mapLabel += `\n⚡ ${dev.latency}ms`;
+                            if (dev.latency < 10) borderHeatColor = '#4ade80'; // Green
+                            else if (dev.latency < 100) borderHeatColor = '#fde047'; // Yellow
+                            else borderHeatColor = '#ef4444'; // Red (High latency)
+                        }
+                    }
+
+                    nodes.push({
+                        id: nodeId,
+                        label: mapLabel,
+                        font: { color: nodeColor, face: 'monospace', size: 12, strokeWidth: 0 },
+                        shape: 'dot',
+                        size: 15,
+                        color: {
+                            background: '#0f172a',
+                            border: borderHeatColor,
+                            highlight: { background: nodeColor, border: '#fff' }
+                        },
+                        borderWidth: (dev.latency > 100 || dev.latency === -1) ? 4 : 2,
+                        shadow: { enabled: true, color: shadowColor, size: 20, x: 0, y: 0 }
+                    });
+
+                    edges.push({
+                        from: 0,
+                        to: nodeId,
+                        color: { color: 'rgba(34, 211, 238, 0.2)', highlight: 'rgba(34, 211, 238, 0.8)' },
+                        width: 2,
+                        smooth: { type: 'continuous' }
+                    });
+                });
+
+                const data = { nodes: nodes, edges: edges };
+                const options = {
+                    physics: {
+                        solver: 'forceAtlas2Based',
+                        forceAtlas2Based: {
+                            gravitationalConstant: -50,
+                            centralGravity: 0.005,
+                            springLength: 150,
+                            springConstant: 0.08
+                        }
+                    },
+                    interaction: { hover: true, dragNodes: true, zoomView: true }
+                };
+
+                if (networkGraph) {
+                    networkGraph.destroy();
+                }
+                networkGraph = new vis.Network(container, data, options);
+            } catch (err) {
+                console.error("Map Error: ", err);
+                container.innerHTML = `<div style="color:#ef4444; padding:20px; font-family:monospace;"><b>Map Load Error:</b> ${err.message}</div>`;
+            }
+        }
+
+        // --- API Action Hooks ---
+        window.updateStatus = async (mac, newStatus) => {
+            try {
+                const response = await fetch('/api/device/status', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mac: mac, status: newStatus })
+                });
+                
+                if (response.ok) {
+                    const device = currentDevices.find(d => d.mac === mac);
+                    if (device) {
+                        device.status = newStatus;
+                        renderTable(); // This auto-updates the map too!
+                    }
+                }
+            } catch (error) {
+                console.error("Error updating status:", error);
+            }
+        };
+
+        document.getElementById('scanBtn').addEventListener('click', async () => {
+            const btn = document.getElementById('scanBtn');
+            const loading = document.getElementById('loadingState');
+            const container = document.getElementById('uiContainer');
+            const statusAlert = document.getElementById('statusAlert');
+
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> SCANNING...';
+            btn.classList.add('opacity-50', 'cursor-not-allowed');
+            container.classList.add('hidden');
+            container.classList.remove('opacity-100');
+            statusAlert.classList.add('hidden');
+            loading.classList.remove('hidden');
+            loading.classList.add('flex');
+
+            try {
+                const response = await fetch('/api/scan');
+                const data = await response.json();
+
+                if (!response.ok || data.status === 'error') {
+                    throw new Error(data.message || 'An unknown server error occurred.');
+                }
+
+                currentDevices = data.devices;
+                currentSubnet = data.subnet;
+                renderTable();
+                
+                container.classList.remove('hidden');
+                setTimeout(() => container.classList.add('opacity-100'), 50);
+
+            } catch (error) {
+                statusAlert.innerHTML = `<i class="fas fa-times-circle mr-2"></i> ${error.message}`;
+                statusAlert.classList.remove('hidden');
+                statusAlert.className = "mb-6 p-4 rounded-lg glass-panel border border-red-500/50 text-red-300 shadow-lg glow-red font-bold tracking-wider";
+            } finally {
+                loading.classList.add('hidden');
+                loading.classList.remove('flex');
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fas fa-radar mr-2"></i> START SCAN';
+                btn.classList.remove('opacity-50', 'cursor-not-allowed');
+            }
+        });
+    </script>
+</body>
+</html>
