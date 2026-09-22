@@ -6,8 +6,11 @@ import subprocess
 import re
 from flask import Flask, render_template, jsonify, request
 import socket
-from scapy.all import ARP, Ether, srp
+from scapy.all import ARP, Ether, srp, sniff, IP, TCP, UDP
 from mac_vendor_lookup import MacLookup
+from collections import deque
+import threading
+import time
 
 app = Flask(__name__)
 mac_lookup = MacLookup()
@@ -135,6 +138,24 @@ def get_local_subnet():
     except Exception:
         return "192.168.1.0/24"
 
+def get_arp_cache():
+    """Fallback to native Windows ARP cache if Scapy fails to broadcast."""
+    devices = []
+    try:
+        out = subprocess.check_output(["arp", "-a"], universal_newlines=True)
+        for line in out.splitlines():
+            line = line.strip()
+            if "dynamic" in line.lower():
+                parts = line.split()
+                if len(parts) >= 2:
+                    ip = parts[0]
+                    mac = parts[1].replace('-', ':').lower()
+                    if ip != "255.255.255.255" and not ip.startswith("224.") and not ip.startswith("239."):
+                        devices.append({"ip": ip, "mac": mac})
+    except Exception:
+        pass
+    return devices
+
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -163,14 +184,26 @@ def api_scan():
     packet = ether / arp_request
 
     try:
-        result = srp(packet, timeout=5, verbose=0)[0]
+        result = srp(packet, timeout=3, verbose=0)[0]
         
+        found_macs = set()
         temp_devices = []
+        
+        # 1. Scapy Results
         for sent, received in result:
+            mac = received.hwsrc.lower()
+            found_macs.add(mac)
             temp_devices.append({
                 "ip": received.psrc,
-                "mac": received.hwsrc
+                "mac": mac
             })
+            
+        # 2. Native Windows ARP Fallback (Catches devices Scapy missed)
+        cached_devices = get_arp_cache()
+        for dev in cached_devices:
+            if dev["mac"] not in found_macs:
+                found_macs.add(dev["mac"])
+                temp_devices.append(dev)
             
         def enrich_device_info(dev):
             mac = dev["mac"]
@@ -208,6 +241,46 @@ def api_scan():
         }), 403
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+
+# --- Live Packet Sniffer ---
+packet_queue = deque(maxlen=200)
+
+def packet_callback(packet):
+    try:
+        if IP in packet:
+            src_ip = packet[IP].src
+            dst_ip = packet[IP].dst
+            proto = "IP"
+            if TCP in packet: proto = "TCP"
+            elif UDP in packet: proto = "UDP"
+            
+            size = len(packet)
+            timestamp = time.strftime('%H:%M:%S', time.localtime())
+            
+            packet_queue.append({
+                "time": timestamp,
+                "src": src_ip,
+                "dst": dst_ip,
+                "proto": proto,
+                "size": size
+            })
+    except Exception:
+        pass
+
+def start_sniffer():
+    try:
+        sniff(prn=packet_callback, store=False)
+    except Exception as e:
+        print(f"Sniffer failed to start: {e}")
+
+# Start the sniffer in a background daemon thread
+sniffer_thread = threading.Thread(target=start_sniffer, daemon=True)
+sniffer_thread.start()
+
+@app.route('/api/traffic')
+def api_traffic():
+    # Return a copy of the list so it doesn't mutate during JSON serialization
+    return jsonify({"packets": list(packet_queue)})
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)

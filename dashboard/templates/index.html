@@ -81,6 +81,11 @@
                     </div>
                 </label>
 
+                <!-- Live Traffic Toggle Button -->
+                <button id="trafficToggleBtn" class="glass-panel btn-glow hover:bg-cyan-900/40 text-purple-400 px-6 py-3 rounded-lg font-bold transition-all duration-300 flex items-center tracking-widest text-shadow-[0_0_10px_rgba(192,132,252,0.8)] border border-purple-500/50">
+                    <i class="fas fa-satellite-dish mr-2"></i> LIVE TRAFFIC
+                </button>
+
                 <!-- Map View Toggle Button -->
                 <button id="viewToggleBtn" class="glass-panel btn-glow hover:bg-cyan-900/40 text-cyan-300 px-6 py-3 rounded-lg font-bold transition-all duration-300 flex items-center tracking-widest glow-cyan border border-cyan-400/50">
                     <i class="fas fa-project-diagram mr-2"></i> MAP VIEW
@@ -147,6 +152,18 @@
                 <!-- Interactive Canvas -->
                 <div id="networkMap" class="w-full h-full bg-black/40"></div>
             </div>
+
+            <!-- LIVE TRAFFIC TERMINAL (Hidden by default) -->
+            <div id="trafficContainer" class="hidden glass-panel rounded-xl overflow-hidden mt-6">
+                <div class="p-3 bg-gray-900/80 border-b border-purple-500/30 flex justify-between items-center">
+                    <h2 class="text-lg font-bold text-purple-400 text-shadow-[0_0_10px_rgba(192,132,252,0.8)]"><i class="fas fa-terminal mr-2"></i>Live Traffic Sniffer</h2>
+                    <span class="text-xs font-mono text-purple-300 animate-pulse"><i class="fas fa-circle text-[8px] mr-1"></i>CAPTURING</span>
+                </div>
+                <div class="p-4 h-[300px] overflow-y-auto font-mono text-xs scroll-smooth" style="background: rgba(0,0,0,0.6);" id="trafficLog">
+                    <!-- Packets injected here -->
+                    <div class="text-gray-500 italic mb-2">Listening for network packets...</div>
+                </div>
+            </div>
             
         </div>
     </div>
@@ -158,6 +175,59 @@
         
         let isMapView = false;
         let networkGraph = null;
+
+        // --- Live Traffic Logic ---
+        let isTrafficView = false;
+        let trafficInterval = null;
+
+        document.getElementById('trafficToggleBtn').addEventListener('click', () => {
+            isTrafficView = !isTrafficView;
+            const container = document.getElementById('trafficContainer');
+            if (isTrafficView) {
+                container.classList.remove('hidden');
+                trafficInterval = setInterval(fetchTraffic, 2000); // Poll every 2 seconds
+                fetchTraffic();
+            } else {
+                container.classList.add('hidden');
+                if (trafficInterval) clearInterval(trafficInterval);
+            }
+        });
+
+        async function fetchTraffic() {
+            try {
+                const response = await fetch('/api/traffic');
+                const data = await response.json();
+                const log = document.getElementById('trafficLog');
+                
+                if (!data.packets || data.packets.length === 0) return;
+                
+                let isAtBottom = Math.abs(log.scrollHeight - log.scrollTop - log.clientHeight) <= 5;
+                
+                let htmlBuffer = [];
+                data.packets.forEach(p => {
+                    let color = 'text-gray-400';
+                    if (p.proto === 'TCP') color = 'text-green-400';
+                    else if (p.proto === 'UDP') color = 'text-yellow-400';
+                    
+                    htmlBuffer.push(`<div class="mb-1 border-b border-gray-800 pb-1 hover:bg-white/5 px-1">
+                        <span class="text-gray-500">[${p.time}]</span> 
+                        <span class="${color} font-bold w-12 inline-block">${p.proto}</span> 
+                        <span class="text-cyan-300">${p.src}</span> 
+                        <span class="text-gray-500 mx-2"><i class="fas fa-arrow-right"></i></span> 
+                        <span class="text-pink-400">${p.dst}</span> 
+                        <span class="text-gray-500 float-right opacity-50">SIZE: ${p.size} B</span>
+                    </div>`);
+                });
+                log.innerHTML = htmlBuffer.join('');
+                
+                // Smart auto-scroll: Only scroll down if the user was already at the bottom
+                if (isAtBottom) {
+                    log.scrollTop = log.scrollHeight;
+                }
+            } catch (e) {
+                console.error("Error fetching traffic", e);
+            }
+        }
 
         // --- View Toggle Logic ---
         document.getElementById('viewToggleBtn').addEventListener('click', () => {
